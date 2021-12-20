@@ -8,6 +8,8 @@ find_package(Curses REQUIRED)
 
 add_executable(${PROJECT_NAME}
     main.c
+    descramble.c
+    hex-output.c
     tui.c
     )
 

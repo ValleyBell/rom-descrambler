@@ -62,6 +62,8 @@ typedef struct view_mapping_state
 	NUM_ENTRY_STATE numEntry;
 } VMAP_STATE;
 
+
+static DESCRMB_INFO* GetDescambleInfo(UINT8 type);	// type = DST_*
 static void colorbox(WINDOW *win, chtype color, int hasbox);
 static UINT8 TextBox_ShowAndEdit(size_t bufLen, char* buffer,
 		WINDOW* wParent, int boxY, int boxX, int boxWidth);
@@ -83,8 +85,10 @@ static void RefreshHexView(void);
 static void Dialog_SaveData(void);
 static void Dialog_GoToOffset(void);
 static UINT8 KeyHandler_Global(int key);
-void tui_main(void);
+void tui_main(APP_DATA* ad);
 
+
+static APP_DATA* appData;
 
 static WINDOW* wTitle;
 static WINDOW* wView;
@@ -93,6 +97,17 @@ static WINDOW* wMaps;
 static UINT8 hexShowMode;
 static UINT8 activeView;
 static VMAP_STATE vmState;
+static UINT8 doQuit;
+
+static DESCRMB_INFO* GetDescambleInfo(UINT8 type)
+{
+	if (type == DST_ADDR)
+		return &appData->dsiAddr;
+	else if (type == DST_DATA)
+		return &appData->dsiData;
+	else
+		return NULL;
+}
 
 static void colorbox(WINDOW *win, chtype color, int hasbox)
 {
@@ -678,7 +693,7 @@ static void tui_init(void)
 	colorbox(wTitle, COLOR_TITLE, 0);
 	colorbox(wView, COLOR_MAINVIEW, 0);
 	colorbox(wMaps, COLOR_MAPPINGS, 0);
-	wprintw(wTitle, "ROM Descrambler - %s", GetLoadedFileName());
+	wprintw(wTitle, "ROM Descrambler - %s", appData->fileName);
 	wrefresh(wTitle);
 	
 	cbreak();
@@ -708,7 +723,7 @@ static void tui_deinit(void)
 
 static UINT8 KeyHandler_View(int key)
 {
-	HEXVIEW_INFO* hvi = GetHexViewInfo();
+	HEXVIEW_INFO* hvi = &appData->info;
 	size_t lastLineOfs = (hvi->endOfs >= hvi->lineChrs) ? (hvi->endOfs - hvi->lineChrs) : 0;
 	int hexOfsMove = 0;
 	UINT8 needUpdate = 0;
@@ -743,14 +758,14 @@ static UINT8 KeyHandler_View(int key)
 		break;
 	case '+':
 		hvi->lineChrs ++;
-		ResizeHexDisplay();
+		ResizeHexDisplay(&appData->info, &appData->work);
 		needUpdate = 1;
 		break;
 	case '-':
 		if (hvi->lineChrs < 2)
 			break;
 		hvi->lineChrs --;
-		ResizeHexDisplay();
+		ResizeHexDisplay(&appData->info, &appData->work);
 		needUpdate = 1;
 		break;
 	case 'v':
@@ -798,31 +813,31 @@ static UINT8 KeyHandler_View(int key)
 
 static void RefreshHexView(void)
 {
-	HEXVIEW_INFO* hvi = GetHexViewInfo();
+	HEXVIEW_INFO* hvi = &appData->info;
 	werase(wView);
 	switch(hexShowMode)
 	{
 	case HSM_EXT:
 		wmove(wView, 0, 0);
-		ShowHexDump(wView, hvi->startOfs, getmaxy(wView), DSM_NONE);
+		ShowHexDump(appData, wView, hvi->startOfs, getmaxy(wView), DSM_NONE);
 		break;
 	case HSM_INT:
 		wmove(wView, 0, 0);
-		ShowHexDump(wView, hvi->startOfs, getmaxy(wView), DSM_ADDR | DSM_DATA);
+		ShowHexDump(appData, wView, hvi->startOfs, getmaxy(wView), DSM_ADDR | DSM_DATA);
 		break;
 	case HSM_BOTH:
 		wmove(wView, 0, 0);
-		ShowHexDump(wView, hvi->startOfs, getmaxy(wView), DSM_NONE);
+		ShowHexDump(appData, wView, hvi->startOfs, getmaxy(wView), DSM_NONE);
 		wmove(wView, 0, getmaxx(wView) / 2);
-		ShowHexDump(wView, hvi->startOfs, getmaxy(wView), DSM_ADDR | DSM_DATA);
+		ShowHexDump(appData, wView, hvi->startOfs, getmaxy(wView), DSM_ADDR | DSM_DATA);
 		break;
 	case HSM_THREE:
 		wmove(wView, 0, 0);
-		ShowHexDump(wView, hvi->startOfs, getmaxy(wView), 0);
+		ShowHexDump(appData, wView, hvi->startOfs, getmaxy(wView), 0);
 		wmove(wView, 0, getmaxx(wView) / 3);
-		ShowHexDump(wView, hvi->startOfs, getmaxy(wView), DSM_ADDR);
+		ShowHexDump(appData, wView, hvi->startOfs, getmaxy(wView), DSM_ADDR);
 		wmove(wView, 0, getmaxx(wView) / 3 * 2);
-		ShowHexDump(wView, hvi->startOfs, getmaxy(wView), DSM_ADDR | DSM_DATA);
+		ShowHexDump(appData, wView, hvi->startOfs, getmaxy(wView), DSM_ADDR | DSM_DATA);
 		break;
 	}
 	wrefresh(wView);
@@ -875,7 +890,6 @@ static void Dialog_GoToOffset(void)
 {
 	const char* title = "Go To Offset";
 	WINDOW* wDlg;
-	HEXVIEW_INFO* hvi = GetHexViewInfo();
 	int oldx, oldy, maxx, maxy;
 	int dlgHeight = 3;
 	int dlgWidth = 32;
@@ -899,8 +913,8 @@ static void Dialog_GoToOffset(void)
 		size_t newOfs = (size_t)strtoul(ofsStr, &endPtr, 0x10);
 		if (endPtr != ofsStr)
 		{
-			if (newOfs < hvi->endOfs)
-				hvi->startOfs = newOfs;
+			if (newOfs < appData->info.endOfs)
+				appData->info.startOfs = newOfs;
 			RefreshHexView();
 		}
 	}
@@ -914,6 +928,10 @@ static UINT8 KeyHandler_Global(int key)
 {
 	switch(key)
 	{
+	case 'q':
+	case 'Q':	// Q = quit
+		doQuit = 1;
+		return 1;
 	case 'c':
 	case 'C':	// C = configuration load/save
 		//activeView = AV_DIALOG;
@@ -926,15 +944,19 @@ static UINT8 KeyHandler_Global(int key)
 	case 'O':	// O = options dialog
 		//Dialog_Options();
 		return 1;
+	case KEY_F(1):
+		// display help dialog
+		return 1;
 	}
 	return 0;
 }
 
-void tui_main(void)
+void tui_main(APP_DATA* ad)
 {
 	UINT8 didProc;
-	HEXVIEW_INFO* hvi = GetHexViewInfo();
-	hvi->startOfs = 0x00;
+	
+	appData = ad;
+	appData->info.startOfs = 0x00;
 	
 	activeView = AV_MAIN;
 	hexShowMode = HSM_BOTH;
@@ -942,16 +964,16 @@ void tui_main(void)
 	vmState.lastColLine = 0;
 	
 	tui_init();
+	doQuit = 0;
+	
 	DrawMappingsWindow();
-	ResizeHexDisplay();
+	ResizeHexDisplay(&appData->info, &appData->work);
 	RefreshHexView();
-	while(1)
+	while(!doQuit)
 	{
 		int key = getch();
 		if (key == ERR)
 			continue;	// ERR is returned on timeout
-		if (key == 'q' || key == 'Q')
-			break;
 		if (key == KEY_RESIZE)
 		{
 			DrawMappingsWindow();

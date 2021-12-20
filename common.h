@@ -1,10 +1,10 @@
 #ifndef __COMMON_H__
 #define __COMMON_H__
 
-#include <stdint.h>
+#include <stddef.h>
 #include <curses.h>	// for WINDOW
 
-typedef uint8_t	UINT8;
+typedef unsigned char	UINT8;
 
 typedef struct file_data
 {
@@ -36,6 +36,15 @@ typedef struct hexview_work
 	size_t lbChrPos;
 	char* lineBuf;	// buffer for numbers + lines
 } HEXVIEW_WORK;
+typedef struct applicaton_data
+{
+	HEXVIEW_INFO info;
+	HEXVIEW_WORK work;
+	const char* fileName;
+	FILE_DATA fileData;
+	DESCRMB_INFO dsiAddr;
+	DESCRMB_INFO dsiData;
+} APP_DATA;
 
 
 // descramble types
@@ -48,16 +57,17 @@ typedef struct hexview_work
 #define DSM_DATA	0x02
 
 
-// TUI functions from tui.cpp
-void tui_main(void);
+// TUI functions from tui.c
+void tui_main(APP_DATA* ad);
 
-// functions from main.cpp
-const char* GetLoadedFileName(void);
+// functions from main.c
 UINT8 SaveDescrambledFile(const char* fileName);
-HEXVIEW_INFO* GetHexViewInfo(void);
-DESCRMB_INFO* GetDescambleInfo(UINT8 type);	// type = DST_*
-void ResizeHexDisplay(void);
-void ShowHexDump(WINDOW* win, size_t startOfs, size_t lines, UINT8 descrmbMode);
+
+// functions from hex-output.c
+void ResizeHexDisplay(const HEXVIEW_INFO* hvi, HEXVIEW_WORK* hvw);
+void ShowHexDump(APP_DATA* hView, WINDOW* win, size_t startOfs, size_t lines, UINT8 descrmbMode);
+
+// functions from descramble.c
 void DSI_Init(DESCRMB_INFO* dsi, UINT8 bits);
 void DSI_Invert(DESCRMB_INFO* dsi);
 size_t DSI_Decode(const DESCRMB_INFO* dsi, size_t value);	// external -> internal
