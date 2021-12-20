@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <curses.h>
 
 #include "common.h"
@@ -10,6 +11,7 @@
 #define COLOR_MAINVIEW	2
 #define COLOR_MAPPINGS	3
 #define COLOR_EDITBOX	4
+#define COLOR_DIALOG	5
 
 #define MAPSWIN_HEIGHT	10
 #define MAPS_PER_COL	8
@@ -23,10 +25,14 @@
 // active view constants
 #define AV_MAIN		0	// main screen (hex view)
 #define AV_MAPS		1	// mappings
+#define AV_DIALOG	2	// dialog
 
 #define VMAP_MODE_DEFAULT	0
 #define VMAP_MODE_SELECT	1
 #define VMAP_MODE_CHANGE	2
+
+#define KEY_ESC		0x1B
+#define KEY_RETURN	'\n'
 
 
 typedef struct number_entry_state
@@ -57,6 +63,8 @@ typedef struct view_mapping_state
 } VMAP_STATE;
 
 static void colorbox(WINDOW *win, chtype color, int hasbox);
+static UINT8 TextBox_ShowAndEdit(size_t bufLen, char* buffer,
+		WINDOW* wParent, int boxY, int boxX, int boxWidth);
 static void DrawMappingsWindow(void);
 static void MappingView_Activate(void);
 static void MappingView_Deactivate(void);
@@ -72,6 +80,9 @@ static void tui_init(void);
 static void tui_deinit(void);
 static UINT8 KeyHandler_View(int key);
 static void RefreshHexView(void);
+static void Dialog_SaveData(void);
+static void Dialog_GoToOffset(void);
+static UINT8 KeyHandler_Global(int key);
 void tui_main(void);
 
 
@@ -93,12 +104,132 @@ static void colorbox(WINDOW *win, chtype color, int hasbox)
 	werase(win);
 	
 	maxy = getmaxy(win);
-	if (hasbox && (maxy > 2))
+	if (hasbox && maxy > 2)
 		box(win, 0, 0);
 	
 	touchwin(win);
 	wrefresh(win);
 	return;
+}
+
+static UINT8 TextBox_ShowAndEdit(size_t bufLen, char* buffer,
+		WINDOW* wParent, int boxY, int boxX, int boxWidth)
+{
+	WINDOW* wEdit;
+	int wpX, wpY;
+	attr_t oldAttrs;
+	UINT8 fin;
+	size_t bufPos;
+	size_t bufFill;
+	UINT8 insertMode;
+	
+	getbegyx(wParent, wpY, wpX);
+	if (boxWidth < 0)
+		boxWidth = getmaxx(wParent) + boxWidth - boxX;
+	wEdit = subwin(wParent, 1, boxWidth, wpY + boxY, wpX + boxX);
+	
+	wattrset(wEdit, COLOR_PAIR(COLOR_EDITBOX));
+	wbkgd(wEdit, COLOR_PAIR(COLOR_EDITBOX));
+	
+	keypad(wEdit, TRUE);
+	insertMode = 1;
+	curs_set(1);	// show cursor
+	
+	fin = 0;
+	bufLen --;	// exclude \0 terminator
+	bufFill = strlen(buffer);
+	bufPos = bufFill;
+	while(!fin)
+	{
+		werase(wEdit);
+		mvwprintw(wEdit, 0, 0, "%s", buffer);
+		wmove(wEdit, 0, bufPos);
+		wrefresh(wEdit);
+		
+		int key = wgetch(wEdit);
+		if (key == ERR)
+			continue;	// timeout
+		switch(key)
+		{
+		case KEY_ESC:
+			fin = 2;	// exit + cancel
+			break;
+		case KEY_RETURN:
+			fin = 1;	// exit + confirm
+			break;
+		case KEY_LEFT:
+			if (bufPos > 0)
+				bufPos --;
+			break;
+		case KEY_RIGHT:
+			if (bufPos < bufFill)
+				bufPos ++;
+			break;
+		case KEY_HOME:
+			bufPos = 0;
+			break;
+		case KEY_END:
+			bufPos = bufFill;
+			break;
+		case KEY_DC:	// delete key
+			if (bufFill > bufPos)
+			{
+				memmove(&buffer[bufPos], &buffer[bufPos + 1], bufFill - bufPos);
+				bufFill --;
+			}
+			break;
+		case KEY_IC:	// enter insert mode
+		case KEY_EIC:	// exit insert mode
+			insertMode = !insertMode;
+			curs_set(insertMode ? 2 : 1);
+			break;
+		default:
+			if (key == erasechar())	// backspace, ^H
+			{
+				if (bufPos > 0)
+				{
+					bufPos --;
+					memmove(&buffer[bufPos], &buffer[bufPos + 1], bufFill - bufPos);
+					bufFill --;	// decrement later to include the \0 terminator
+				}
+			}
+			else if (key == killchar())	// ^U
+			{
+				bufFill = 0;
+				bufPos = bufFill;
+				buffer[bufPos] = '\0';
+			}
+			else if (isprint(key))
+			{
+				if (insertMode)
+				{
+					if (bufFill < bufLen)
+					{
+						bufFill ++;
+						memmove(&buffer[bufPos + 1], &buffer[bufPos], bufFill - bufPos);
+						buffer[bufPos] = (char)key;
+						bufPos ++;
+					}
+				}
+				else
+				{
+					if (bufFill < bufLen)
+					{
+						buffer[bufPos] = (char)key;
+						bufPos ++;
+						bufFill ++;
+						if (bufPos == bufFill)
+							buffer[bufPos] = '\0';	// add \0-terminator for safety
+					}
+				}
+			}
+		}
+	}
+	buffer[bufFill] = '\0';	// enforce '\0' terminator at the end
+	
+	curs_set(0);	// hide cursor
+	delwin(wEdit);
+	return fin;
 }
 
 static void DrawMappingsWindow(void)
@@ -206,7 +337,6 @@ static void MappingView_RefreshCursorPos(UINT8 storeLinePos)
 	int line;
 	int x, y;
 	
-	mvwprintw(wMaps, 9, 40, "CurLine: %d  ", vmState.curEntry);
 	mapping = MappingView_Entry2Line(vmState.curEntry, &mode);
 	if (mapping < 0)
 		return;
@@ -245,7 +375,7 @@ static UINT8 KeyHandler_MappingsMain(int key)
 
 	switch(key)
 	{
-	case 0x1B:	// ESC
+	case KEY_ESC:
 		MappingView_Deactivate();
 		activeView = AV_MAIN;
 		return 1;
@@ -474,12 +604,12 @@ static UINT8 KeyHandler_NumEntry(NUM_ENTRY_STATE* nes, int key, UINT8 quickEnd)
 {
 	switch(key)
 	{
-	case '\n':	// Return key
+	case KEY_RETURN:
 		if (nes->inPos == 0)
 			return 2;	// nothing entered - cancel
 		nes->value = ParseNumber(nes->input, nes->inPos);
 		return 1;	// finished parsing
-	case 0x1B:	// ESC
+	case KEY_ESC:
 		return 2;	// input cancelled
 	case KEY_UP:
 	case KEY_DOWN:
@@ -526,6 +656,7 @@ static void tui_init(void)
 	init_pair(COLOR_MAINVIEW, COLOR_WHITE, COLOR_BLUE);
 	init_pair(COLOR_MAPPINGS, COLOR_WHITE, COLOR_CYAN);
 	init_pair(COLOR_EDITBOX , COLOR_WHITE, COLOR_BLACK);
+	init_pair(COLOR_DIALOG  , COLOR_BLACK, COLOR_CYAN);
 	
 	wTitle = subwin(stdscr, 1, COLS, 0, 0);
 	wView = subwin(stdscr, LINES - MAPSWIN_HEIGHT - 1, COLS, 1, 0);
@@ -534,7 +665,7 @@ static void tui_init(void)
 	colorbox(wTitle, COLOR_TITLE, 0);
 	colorbox(wView, COLOR_MAINVIEW, 0);
 	colorbox(wMaps, COLOR_MAPPINGS, 0);
-	wprintw(wTitle, "ROM Descrambler");
+	wprintw(wTitle, "ROM Descrambler - %s", GetLoadedFileName());
 	wrefresh(wTitle);
 	
 	cbreak();
@@ -616,11 +747,15 @@ static UINT8 KeyHandler_View(int key)
 		needUpdate = 1;
 		break;
 	case 'm':
-	case 'M':
+	case 'M':	// M = focus Mappings view
 		activeView = AV_MAPS;
 		MappingView_Activate();
 		needUpdate = 1;
 		break;
+	case 'g':
+	case 'G':	// G = go to offset
+		Dialog_GoToOffset();
+		return 1;
 	}
 	if (hexOfsMove < 0)
 	{
@@ -681,13 +816,115 @@ static void RefreshHexView(void)
 	return;
 }
 
+static void Dialog_SaveData(void)
+{
+	const char* title = "Save descrambled data";
+	WINDOW* wDlg;
+	int oldx, oldy, maxx, maxy;
+	int dlgHeight = 3;
+	int dlgWidth = 60;
+	int dlgX = (getmaxx(stdscr) - dlgWidth) / 2;
+	int dlgY = (getmaxy(stdscr) - dlgHeight) / 2;
+	UINT8 fin;
+	char fileName[0x200];
+	
+	wDlg = newwin(dlgHeight, dlgWidth, dlgY, dlgX);
+	colorbox(wDlg, COLOR_DIALOG, 1);
+	
+	mvwaddstr(wDlg, 0, (dlgWidth - strlen(title)) / 2, title);
+	mvwaddstr(wDlg, 1, 2, "File Name: ");
+	wrefresh(wDlg);
+	strcpy(fileName, "out.bin");
+	fin = TextBox_ShowAndEdit(sizeof(fileName), fileName, wDlg, 1, getcurx(wDlg), -2);
+	
+	if (fin == 1)
+	{
+		int posY = dlgHeight - 1;
+		UINT8 retVal;
+		
+		mvwaddstr(wDlg, posY, 1, "Saving ...");
+		wrefresh(wDlg);
+		retVal = SaveDescrambledFile(fileName);
+		if (!retVal)
+			mvwaddstr(wDlg, posY, 1, "Done.     ");
+		else
+			mvwaddstr(wDlg, posY, 1, "Failed.   ");
+		wrefresh(wDlg);
+		wgetch(wDlg);
+	}
+	delwin(wDlg);
+	touchwin(stdscr);
+	wrefresh(stdscr);
+	return;
+}
+
+static void Dialog_GoToOffset(void)
+{
+	const char* title = "Go To Offset";
+	WINDOW* wDlg;
+	HEXVIEW_INFO* hvi = GetHexViewInfo();
+	int oldx, oldy, maxx, maxy;
+	int dlgHeight = 3;
+	int dlgWidth = 32;
+	int dlgX = (getmaxx(stdscr) - dlgWidth) / 2;
+	int dlgY = (getmaxy(stdscr) - dlgHeight) / 2;
+	UINT8 fin;
+	char ofsStr[0x09];	// enough for 32-bit offsets
+	
+	wDlg = newwin(dlgHeight, dlgWidth, dlgY, dlgX);
+	colorbox(wDlg, COLOR_DIALOG, 1);
+	
+	mvwaddstr(wDlg, 0, (dlgWidth - strlen(title)) / 2, title);
+	mvwaddstr(wDlg, 1, 2, "Offset: 0x");
+	wrefresh(wDlg);
+	strcpy(ofsStr, "");
+	fin = TextBox_ShowAndEdit(sizeof(ofsStr), ofsStr, wDlg, 1, getcurx(wDlg), -2);
+	
+	if (fin == 1)
+	{
+		char* endPtr;
+		size_t newOfs = (size_t)strtoul(ofsStr, &endPtr, 0x10);
+		if (endPtr != ofsStr)
+		{
+			if (newOfs < hvi->endOfs)
+				hvi->startOfs = newOfs;
+			RefreshHexView();
+		}
+	}
+	delwin(wDlg);
+	touchwin(stdscr);
+	wrefresh(stdscr);
+	return;
+}
+
+static UINT8 KeyHandler_Global(int key)
+{
+	switch(key)
+	{
+	case 'c':
+	case 'C':	// C = configuration load/save
+		//activeView = AV_DIALOG;
+		return 1;
+	case 's':
+	case 'S':	// S = save descrambled data
+		Dialog_SaveData();
+		return 1;
+	case 'o':
+	case 'O':	// O = options dialog
+		//Dialog_Options();
+		return 1;
+	}
+	return 0;
+}
+
 void tui_main(void)
 {
+	UINT8 didProc;
 	HEXVIEW_INFO* hvi = GetHexViewInfo();
 	hvi->startOfs = 0x00;
 	
 	activeView = AV_MAIN;
-	hexShowMode = HSM_THREE;
+	hexShowMode = HSM_BOTH;
 	vmState.curEntry = 0;
 	vmState.lastColLine = 0;
 	
@@ -712,12 +949,17 @@ void tui_main(void)
 		switch(activeView)
 		{
 		case AV_MAIN:
-			KeyHandler_View(key);
+			didProc = KeyHandler_View(key);
 			break;
 		case AV_MAPS:
-			KeyHandler_MappingsMain(key);
+			didProc = KeyHandler_MappingsMain(key);
+			break;
+		default:
+			didProc = 0;
 			break;
 		}
+		if (! didProc)
+			didProc = KeyHandler_Global(key);
 	}
 	tui_deinit();
 	return;

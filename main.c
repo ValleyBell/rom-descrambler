@@ -7,6 +7,9 @@
 #include "common.h"
 
 
+static UINT8 WriteFileData(const char* fileName, size_t dataLen, const void* data);
+
+
 // CM-32P ROM descrambling
 //static DESCRMB_INFO dsiAddr = {17, {0,5,4,6, 1,2,3,8, 10,13,9,7, 11,12,16,14, 15}, (1<<17)-1};
 // U-110 card descrambling
@@ -16,6 +19,7 @@ static DESCRMB_INFO dsiData = {8, {2,7,6,4, 1,3,0,5}, 0xFF};
 static HEXVIEW_INFO hvInfo = {16, 2, 3, 0};
 static HEXVIEW_WORK hvWork = {0, 0, 0, 0, NULL};
 
+static const char* fileName;
 static FILE_DATA fData;
 
 int main(int argc, char* argv[])
@@ -28,11 +32,12 @@ int main(int argc, char* argv[])
 		return 0;
 	}
 	
+	fileName = argv[1];
 	{
-		FILE* hFile = fopen(argv[1], "rb");
+		FILE* hFile = fopen(fileName, "rb");
 		if (hFile == NULL)
 		{
-			printf("Unable to read %s\n", argv[1]);
+			printf("Unable to read %s\n", fileName);
 			return 1;
 		}
 		fseek(hFile, 0, SEEK_END);
@@ -48,6 +53,50 @@ int main(int argc, char* argv[])
 	return 0;
 }
 
+
+const char* GetLoadedFileName(void)
+{
+	return fileName;
+}
+
+UINT8 SaveDescrambledFile(const char* fileName)
+{
+	UINT8* descData;
+	UINT8 retVal;
+	size_t curPos;
+	
+	descData = (UINT8*)malloc(fData.size);
+	for (curPos = 0x00; curPos < fData.size; curPos ++)
+	{
+		size_t dOfs = DSI_Encode(&dsiAddr, curPos);
+		if (dOfs < fData.size)
+			descData[curPos] = (UINT8)DSI_Encode(&dsiData, fData.data[dOfs]);
+		else
+			descData[curPos] = 0x00;
+	}
+	
+	retVal = WriteFileData(fileName, fData.size, descData);
+	free(descData);
+	return retVal;
+}
+
+static UINT8 WriteFileData(const char* fileName, size_t dataLen, const void* data)
+{
+	FILE* hFile;
+	size_t writtenBytes;
+	
+	hFile = fopen(fileName, "wb");
+	if (hFile == NULL)
+		return 0xFF;
+	
+	writtenBytes = fwrite(data, 1, dataLen, hFile);
+	fclose(hFile);
+	
+	if (writtenBytes < dataLen)
+		return 0x01;
+	else
+		return 0x00;
+}
 
 // -------- Hex Output --------
 HEXVIEW_INFO* GetHexViewInfo(void)

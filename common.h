@@ -52,6 +52,8 @@ typedef struct hexview_work
 void tui_main(void);
 
 // functions from main.cpp
+const char* GetLoadedFileName(void);
+UINT8 SaveDescrambledFile(const char* fileName);
 HEXVIEW_INFO* GetHexViewInfo(void);
 DESCRMB_INFO* GetDescambleInfo(UINT8 type);	// type = DST_*
 void ResizeHexDisplay(void);
