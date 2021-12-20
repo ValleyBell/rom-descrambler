@@ -403,6 +403,19 @@ static UINT8 KeyHandler_MappingsMain(int key)
 		wclrtoeol(wMaps);
 		wrefresh(wMaps);
 		return 1;
+	case 'r':
+	case 'R':	// revert all mappings
+		{
+			int mode;
+			for (mode = 0; mode < 2; mode ++)
+			{
+				DESCRMB_INFO* dsi = GetDescambleInfo(mode);
+				DSI_Invert(dsi);
+			}
+			RefreshHexView();
+			DrawMappingsWindow();
+		}
+		break;
 	case KEY_UP:
 		if (vmState.curEntry > 0)
 			vmState.curEntry --;
