@@ -67,7 +67,7 @@ static UINT8 KeyHandler_MappingsMain(int key);
 static UINT8 KeyHandler_ChangeValue(int key);
 static UINT8 KeyHandler_MappingsSelect(int key);
 static void NumEntryState_Init(NUM_ENTRY_STATE* nes);
-static UINT8 KeyHandler_NumEntry(NUM_ENTRY_STATE* nes, int key);
+static UINT8 KeyHandler_NumEntry(NUM_ENTRY_STATE* nes, int key, UINT8 quickEnd);
 static void tui_init(void);
 static void tui_deinit(void);
 static UINT8 KeyHandler_View(int key);
@@ -157,6 +157,8 @@ static void MappingView_Activate(void)
 {
 	curs_set(1);
 	vmState.mode = VMAP_MODE_DEFAULT;
+	MappingView_RefreshCursorPos(0);
+	wrefresh(wMaps);
 	return;
 }
 
@@ -329,7 +331,44 @@ static UINT8 KeyHandler_MappingsMain(int key)
 			wrefresh(wMaps);
 		}
 		return 1;
-	case '\n':	// Return - change number
+	case '-':
+	case '+':
+		{
+			DESCRMB_INFO* dsi;
+			int mapping, mode;
+			int textX, textY;
+			
+			mapping = MappingView_Entry2Line(vmState.curEntry, &mode);
+			dsi = GetDescambleInfo(mode);
+			
+			MappingView_RefreshCursorPos(0);
+			getyx(wMaps, textY, textX);
+			textX ++;	// the default cursor position is the letter
+			if (dsi == NULL)
+				return 1;
+			if (key == '-')
+			{
+				if (dsi->bitMap[mapping] == 0)
+					return 1;
+				dsi->bitMap[mapping] --;
+			}
+			else if (key == '+')
+			{
+				if (dsi->bitMap[mapping] >= dsi->bitCnt - 1)
+					return 1;
+				dsi->bitMap[mapping] ++;
+			}
+			RefreshHexView();
+			
+			wattron(wMaps, COLOR_PAIR(COLOR_EDITBOX));
+			mvwprintw(wMaps, textY, textX, "%2d ", dsi->bitMap[mapping]);
+			wattroff(wMaps, COLOR_PAIR(COLOR_EDITBOX));
+			MappingView_RefreshCursorPos(0);
+			wrefresh(wMaps);
+		}
+		return 1;
+	default:
+		if (key >= '0' && key <= '9')
 		{
 			DESCRMB_INFO* dsi;
 			int mode;
@@ -346,12 +385,12 @@ static UINT8 KeyHandler_MappingsMain(int key)
 			vmState.numEntry.maxValue = dsi->bitCnt - 1;
 			NumEntryState_Init(&vmState.numEntry);
 			
-			wmove(wMaps, vmState.numEntry.textY, vmState.numEntry.textX);
 			wattron(wMaps, COLOR_PAIR(COLOR_EDITBOX));
-			wrefresh(wMaps);
+			mvwhline(wMaps, vmState.numEntry.textY, vmState.numEntry.textX, ' ', 3);	// erase text
+			wmove(wMaps, vmState.numEntry.textY, vmState.numEntry.textX);
+			KeyHandler_ChangeValue(key);	// process the number
+			return 1;
 		}
-		return 1;
-	default:
 		break;
 	}
 	
@@ -362,28 +401,31 @@ static UINT8 KeyHandler_ChangeValue(int key)
 {
 	int finishSelect;
 	
-	finishSelect = KeyHandler_NumEntry(&vmState.numEntry, key);
+	finishSelect = KeyHandler_NumEntry(&vmState.numEntry, key, 0);
 	if (finishSelect)
 	{
-		if (finishSelect == 1)
+		int mapping, mode;
+		
+		mapping = MappingView_Entry2Line(vmState.curEntry, &mode);
+		DESCRMB_INFO* dsi = GetDescambleInfo(mode);
+		// finishSelect == 2 -> keep previous value
+		if (finishSelect == 1 || finishSelect == 0xFF)	// "confirm" (1) or "move" (0xFF)
 		{
-			int mapping, mode;
-			
-			mapping = MappingView_Entry2Line(vmState.curEntry, &mode);
-			DESCRMB_INFO* dsi = GetDescambleInfo(mode);
-			if (vmState.numEntry.value < dsi->bitCnt)
+			if (vmState.numEntry.value < dsi->bitCnt)	// apply value when in range
 			{
 				dsi->bitMap[mapping] = vmState.numEntry.value;
-				mvwprintw(wMaps, vmState.numEntry.textY, vmState.numEntry.textX, "%2d ", dsi->bitMap[mapping]);
 				RefreshHexView();
 			}
 		}
+		mvwprintw(wMaps, vmState.numEntry.textY, vmState.numEntry.textX, "%2d ", dsi->bitMap[mapping]);
 		
 		wattroff(wMaps, COLOR_PAIR(COLOR_EDITBOX));
 		vmState.mode = VMAP_MODE_DEFAULT;
 		MappingView_RefreshCursorPos(0);
 	}
 	wrefresh(wMaps);
+	if (finishSelect == 0xFF)
+		return 0;	// forward key to parent
 	return 1;
 }
 
@@ -391,9 +433,10 @@ static UINT8 KeyHandler_MappingsSelect(int key)
 {
 	int finishSelect;
 	
-	finishSelect = KeyHandler_NumEntry(&vmState.numEntry, key);
+	finishSelect = KeyHandler_NumEntry(&vmState.numEntry, key, 1);
 	if (finishSelect)
 	{
+		// movement key (select==0xFF) -> cancel
 		if (finishSelect == 1)
 		{
 			if (vmState.numEntry.value < vmState.mapsCnt[vmState.selType])
@@ -406,6 +449,8 @@ static UINT8 KeyHandler_MappingsSelect(int key)
 		MappingView_RefreshCursorPos(1);
 	}
 	wrefresh(wMaps);
+	if (finishSelect == 0xFF)
+		return 0;	// forward key to parent
 	return 1;
 }
 
@@ -425,33 +470,49 @@ static void NumEntryState_Init(NUM_ENTRY_STATE* nes)
 	return;
 }
 
-static UINT8 KeyHandler_NumEntry(NUM_ENTRY_STATE* nes, int key)
+static UINT8 KeyHandler_NumEntry(NUM_ENTRY_STATE* nes, int key, UINT8 quickEnd)
 {
+	switch(key)
+	{
+	case '\n':	// Return key
+		if (nes->inPos == 0)
+			return 2;	// nothing entered - cancel
+		nes->value = ParseNumber(nes->input, nes->inPos);
+		return 1;	// finished parsing
+	case 0x1B:	// ESC
+		return 2;	// input cancelled
+	case KEY_UP:
+	case KEY_DOWN:
+	case KEY_LEFT:
+	case KEY_RIGHT:
+		return 0xFF;
+	}
+	
 	if (key >= '0' && key <= '9')
 	{
+		if (nes->inPos >= nes->maxDigits)
+		{
+			// when entering more digits than allowed, discard the first (oldest) digit
+			memmove(&nes->input[0], &nes->input[1], nes->inPos - 1);
+			nes->inPos --;
+			mvwprintw(wMaps, nes->textY, nes->textX, "%*s", nes->inPos, nes->input);
+		}
 		nes->input[nes->inPos] = key;
 		mvwaddch(wMaps, nes->textY, nes->textX + nes->inPos, key);
 		nes->inPos ++;
 		
 		nes->value = ParseNumber(nes->input, nes->inPos);
-		if (nes->inPos >= nes->maxDigits || nes->value * 10 > nes->maxValue)
+		if (quickEnd)
 		{
-			// stop accepting values when
-			//	- 1 digit (maxValue 1..10) or 2 digits (mapsCnt 11..100) were entered
-			//	- entering another digit would make selValue larger than mapsCnt
-			return 1;	// finished parsing
+			if (nes->inPos >= nes->maxDigits || nes->value * 10 > nes->maxValue)
+			{
+				// stop accepting values when
+				//	- 1 digit (maxValue 1..10) or 2 digits (mapsCnt 11..100) were entered
+				//	- entering another digit would make selValue larger than mapsCnt
+				return 1;	// finished parsing
+			}
 		}
-	}
-	else if (key == '\n')	// Return key
-	{
-		if (nes->inPos == 0)
-			return 2;	// nothing entered - cancel
-		nes->value = ParseNumber(nes->input, nes->inPos);
-		return 1;	// finished parsing
-	}
-	else if (key == 0x1B)	// ESC
-	{
-		return 2;	// input cancelled
+		return 0;
 	}
 	
 	return 0;
