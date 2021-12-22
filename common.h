@@ -12,10 +12,11 @@ typedef struct file_data
 	UINT8* data;
 } FILE_DATA;
 
+#define DESCRMB_MAXBITS	32
 typedef struct descramble_info
 {
 	UINT8 bitCnt;
-	UINT8 bitMap[32];
+	UINT8 bitMap[DESCRMB_MAXBITS];
 	size_t bitMask;
 } DESCRMB_INFO;
 
@@ -40,10 +41,12 @@ typedef struct applicaton_data
 {
 	HEXVIEW_INFO info;
 	HEXVIEW_WORK work;
-	const char* fileName;
+	char* filePath;
+	char* cfgPath;
 	FILE_DATA fileData;
 	DESCRMB_INFO dsiAddr;
 	DESCRMB_INFO dsiData;
+	UINT8 cfgAutoSave;
 } APP_DATA;
 
 
@@ -61,14 +64,18 @@ typedef struct applicaton_data
 void tui_main(APP_DATA* ad);
 
 // functions from main.c
-UINT8 SaveDescrambledFile(const char* fileName);
+UINT8 SaveDescrambledFile(const char* fileName, APP_DATA* ad);
+UINT8 LoadConfiguration(const char* fileName, APP_DATA* ad);
+UINT8 SaveConfiguration(const char* fileName, const APP_DATA* ad);
 
 // functions from hex-output.c
 void ResizeHexDisplay(const HEXVIEW_INFO* hvi, HEXVIEW_WORK* hvw);
 void ShowHexDump(APP_DATA* hView, WINDOW* win, size_t startOfs, size_t lines, UINT8 descrmbMode);
 
 // functions from descramble.c
+UINT8 DSI_Size2AddrBitCount(size_t fileSize);
 void DSI_Init(DESCRMB_INFO* dsi, UINT8 bits);
+void DSI_Resize(DESCRMB_INFO* dsi, UINT8 bits);
 void DSI_Invert(DESCRMB_INFO* dsi);
 size_t DSI_Decode(const DESCRMB_INFO* dsi, size_t value);	// external -> internal
 size_t DSI_Encode(const DESCRMB_INFO* dsi, size_t value);	// internal -> external

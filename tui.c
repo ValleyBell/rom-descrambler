@@ -693,7 +693,7 @@ static void tui_init(void)
 	colorbox(wTitle, COLOR_TITLE, 0);
 	colorbox(wView, COLOR_MAINVIEW, 0);
 	colorbox(wMaps, COLOR_MAPPINGS, 0);
-	wprintw(wTitle, "ROM Descrambler - %s", appData->fileName);
+	wprintw(wTitle, "ROM Descrambler - %s", appData->filePath);
 	wrefresh(wTitle);
 	
 	cbreak();
@@ -872,7 +872,7 @@ static void Dialog_SaveData(void)
 		
 		mvwaddstr(wDlg, posY, 1, "Saving ...");
 		wrefresh(wDlg);
-		retVal = SaveDescrambledFile(fileName);
+		retVal = SaveDescrambledFile(fileName, appData);
 		if (!retVal)
 			mvwaddstr(wDlg, posY, 1, "Done.     ");
 		else

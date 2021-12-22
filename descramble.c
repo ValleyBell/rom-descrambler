@@ -12,12 +12,34 @@ static size_t CalcBitmask(UINT8 bits)
 		return ((size_t)1 << bits) - 1;
 }
 
+UINT8 DSI_Size2AddrBitCount(size_t fileSize)
+{
+	UINT8 bits = 0;
+	if (fileSize == 0)
+		return 0;
+	fileSize --;
+	while(fileSize > 0)
+	{
+		bits ++;
+		fileSize >>= 1;
+	}
+	return bits;
+}
+
 void DSI_Init(DESCRMB_INFO* dsi, UINT8 bits)
 {
 	UINT8 bit;
 	dsi->bitCnt = bits;
-	for (bit = 0; bit < dsi->bitCnt; bit ++)
+	for (bit = 0; bit < DESCRMB_MAXBITS; bit ++)
 		dsi->bitMap[bit] = bit;
+	dsi->bitMask = CalcBitmask(dsi->bitCnt);
+	return;
+}
+
+void DSI_Resize(DESCRMB_INFO* dsi, UINT8 bits)
+{
+	UINT8 bit;
+	dsi->bitCnt = bits;
 	dsi->bitMask = CalcBitmask(dsi->bitCnt);
 	return;
 }
