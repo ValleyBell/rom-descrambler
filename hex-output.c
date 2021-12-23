@@ -21,13 +21,30 @@ void ResizeHexDisplay(const HEXVIEW_INFO* hvi, HEXVIEW_WORK* hvw)
 	hvw->lbDigPos = hvw->lbLen;
 	hvw->lbLen += hvi->lineChrs * 2;	// hex digits per line
 	hvw->lbLen += (hvi->lineChrs - 1) / hvi->wordSize;	// spaces between words
+	
 	hvw->lbLen += hvi->sepSize;	// spaces between hex and character display
 	hvw->lbChrPos = hvw->lbLen;
-	
 	hvw->lbLen += hvi->lineChrs;
 	
 	hvw->lineBuf = (char*)realloc(hvw->lineBuf, hvw->lbLen + 1);	// +1 for '\0' terminator
 	return;
+}
+
+size_t GetMaxBytesPerLine(const HEXVIEW_INFO* hvi, const HEXVIEW_WORK* hvw, size_t screenWidth)
+{
+	size_t lenStatic = hvw->ofsDigits + 2 * hvi->sepSize;
+	if (screenWidth <= lenStatic)
+		return 0;
+	screenWidth -= lenStatic;
+	
+	// width =
+	//	(lineChrs*2) [hex digits] +
+	//	(lineChrs-1)*wordSize [spaces between groups] +
+	//	(lineChrs*1) [ASCII characters]
+	// -> w = (c*3) + (c-1)/g
+	// -> c = (w*g+1) / (3*g+1)
+	// -> c = (w*g+g) / (3*g+1) [minor adjustment to make up for round-to-zero during integer divisions]
+	return ((screenWidth + 1) * hvi->wordSize) / (3 * hvi->wordSize + 1);
 }
 
 static char PrintHexDigit(UINT8 digit)

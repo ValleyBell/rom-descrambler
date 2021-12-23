@@ -757,6 +757,17 @@ static UINT8 KeyHandler_View(int key)
 		needUpdate = 1;
 		break;
 	case '+':
+		{
+			size_t maxChrs;
+			size_t scrWidth = (size_t)getmaxx(wView);
+			if (hexShowMode == HSM_BOTH)
+				scrWidth /= 2;
+			else if (hexShowMode == HSM_THREE)
+				scrWidth /= 3;
+			maxChrs = GetMaxBytesPerLine(&appData->info, &appData->work, scrWidth);
+			if (hvi->lineChrs >= maxChrs)
+				break;
+		}
 		hvi->lineChrs ++;
 		ResizeHexDisplay(&appData->info, &appData->work);
 		needUpdate = 1;
@@ -771,8 +782,22 @@ static UINT8 KeyHandler_View(int key)
 	case 'v':
 	case 'V':	// V = view mode
 		hexShowMode ++;
-		hexShowMode %= 3;
+		hexShowMode %= 4;
 		needUpdate = 1;
+		{
+			size_t maxChrs;
+			size_t scrWidth = (size_t)getmaxx(wView);
+			if (hexShowMode == HSM_BOTH)
+				scrWidth /= 2;
+			else if (hexShowMode == HSM_THREE)
+				scrWidth /= 3;
+			maxChrs = GetMaxBytesPerLine(&appData->info, &appData->work, scrWidth);
+			if (hvi->lineChrs > maxChrs)
+			{
+				hvi->lineChrs = maxChrs;
+				ResizeHexDisplay(&appData->info, &appData->work);
+			}
+		}
 		break;
 	case 'm':
 	case 'M':	// M = focus Mappings view

@@ -70,6 +70,7 @@ UINT8 SaveConfiguration(const char* fileName, const APP_DATA* ad);
 
 // functions from hex-output.c
 void ResizeHexDisplay(const HEXVIEW_INFO* hvi, HEXVIEW_WORK* hvw);
+size_t GetMaxBytesPerLine(const HEXVIEW_INFO* hvi, const HEXVIEW_WORK* hvw, size_t screenWidth);
 void ShowHexDump(APP_DATA* hView, WINDOW* win, size_t startOfs, size_t lines, UINT8 descrmbMode);
 
 // functions from descramble.c
