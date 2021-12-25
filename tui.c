@@ -61,10 +61,24 @@ typedef struct view_mapping_state
 	UINT8 selType;
 	NUM_ENTRY_STATE numEntry;
 } VMAP_STATE;
+#define OEF_BUTTON	0
+#define OEF_TOGGLE	1
+#define OEF_NUMBER	2
+typedef struct option_entry
+{
+	UINT8 type;	// field type - see OEF_* constants
+	char access;	// accessor letter
+	int y;	// option Y position
+	int cx;	// cursor X position
+	int fx;	// field start, X position
+	int fw;	// field width
+	int maxValue;
+	int* valPtr;
+} OPT_ENTRY;
 
 
 static DESCRMB_INFO* GetDescambleInfo(UINT8 type);	// type = DST_*
-static void colorbox(WINDOW *win, chtype color, int hasbox);
+static void ColorWindow(WINDOW *win, int color, attr_t attr, UINT8 drawBorder);
 static UINT8 TextBox_ShowAndEdit(size_t bufLen, char* buffer,
 		WINDOW* wParent, int boxY, int boxX, int boxWidth);
 static void DrawMappingsWindow(void);
@@ -77,7 +91,7 @@ static UINT8 KeyHandler_MappingsMain(int key);
 static UINT8 KeyHandler_ChangeValue(int key);
 static UINT8 KeyHandler_MappingsSelect(int key);
 static void NumEntryState_Init(NUM_ENTRY_STATE* nes);
-static UINT8 KeyHandler_NumEntry(NUM_ENTRY_STATE* nes, int key, UINT8 quickEnd);
+static UINT8 KeyHandler_NumEntry(NUM_ENTRY_STATE* nes, WINDOW* win, int key, UINT8 quickEnd);
 static void tui_init(void);
 static void tui_deinit(void);
 static UINT8 KeyHandler_View(int key);
@@ -109,22 +123,38 @@ static DESCRMB_INFO* GetDescambleInfo(UINT8 type)
 		return NULL;
 }
 
-static void colorbox(WINDOW *win, chtype color, int hasbox)
+static void ColorWindow(WINDOW* win, int color, attr_t attr, UINT8 drawBorder)
 {
-	int maxy;
-	chtype attr = color & A_ATTR & ~A_REVERSE;
-	wattrset(win, COLOR_PAIR(color & A_CHARTEXT) | attr);
-	wbkgd(win, COLOR_PAIR(color & A_CHARTEXT) | attr);
-	
+	wattrset(win, COLOR_PAIR(color) | attr);
+	wbkgd(win, COLOR_PAIR(color) | attr);
 	werase(win);
 	
-	maxy = getmaxy(win);
-	if (hasbox && maxy > 2)
+	if (drawBorder && getmaxy(win) > 2)
 		box(win, 0, 0);
 	
 	touchwin(win);
-	wrefresh(win);
 	return;
+}
+
+static void DrawBox(WINDOW* win, int y, int x, int h, int w)
+{
+	// a box of size (w,h) is drawn to (0,0), (w-1,h-1)
+	// For easier handling, subtract the 1 here already.
+	w --;	h --;
+	mvwaddch(win, y + 0, x + 0, ACS_ULCORNER);
+	mvwhline(win, y + 0, x + 1, ACS_HLINE, w - 1);
+	mvwaddch(win, y + 0, x + w, ACS_URCORNER);
+	mvwvline(win, y + 1, x + 0, ACS_VLINE, h - 1);
+	mvwvline(win, y + 1, x + w, ACS_VLINE, h - 1);
+	mvwaddch(win, y + h, x + 0, ACS_LLCORNER);
+	mvwhline(win, y + h, x + 1, ACS_HLINE, w - 1);
+	mvwaddch(win, y + h, x + w, ACS_LRCORNER);
+	return;
+}
+
+static int DrawCenteredText(WINDOW* win, int y, int x, int w, const char* text)
+{
+	return mvwaddstr(win, y, x + (w - strlen(text)) / 2, text);
 }
 
 static UINT8 TextBox_ShowAndEdit(size_t bufLen, char* buffer,
@@ -132,7 +162,6 @@ static UINT8 TextBox_ShowAndEdit(size_t bufLen, char* buffer,
 {
 	WINDOW* wEdit;
 	int wpX, wpY;
-	attr_t oldAttrs;
 	UINT8 fin;
 	size_t bufPos;
 	size_t bufFill;
@@ -557,9 +586,7 @@ static UINT8 KeyHandler_MappingsMain(int key)
 
 static UINT8 KeyHandler_ChangeValue(int key)
 {
-	int finishSelect;
-	
-	finishSelect = KeyHandler_NumEntry(&vmState.numEntry, key, 0);
+	UINT8 finishSelect = KeyHandler_NumEntry(&vmState.numEntry, wMaps, key, 0);
 	if (finishSelect)
 	{
 		int mapping, mode;
@@ -589,9 +616,7 @@ static UINT8 KeyHandler_ChangeValue(int key)
 
 static UINT8 KeyHandler_MappingsSelect(int key)
 {
-	int finishSelect;
-	
-	finishSelect = KeyHandler_NumEntry(&vmState.numEntry, key, 1);
+	UINT8 finishSelect = KeyHandler_NumEntry(&vmState.numEntry, wMaps, key, 1);
 	if (finishSelect)
 	{
 		// movement key (select==0xFF) -> cancel
@@ -628,7 +653,7 @@ static void NumEntryState_Init(NUM_ENTRY_STATE* nes)
 	return;
 }
 
-static UINT8 KeyHandler_NumEntry(NUM_ENTRY_STATE* nes, int key, UINT8 quickEnd)
+static UINT8 KeyHandler_NumEntry(NUM_ENTRY_STATE* nes, WINDOW* win, int key, UINT8 quickEnd)
 {
 	switch(key)
 	{
@@ -653,10 +678,10 @@ static UINT8 KeyHandler_NumEntry(NUM_ENTRY_STATE* nes, int key, UINT8 quickEnd)
 			// when entering more digits than allowed, discard the first (oldest) digit
 			memmove(&nes->input[0], &nes->input[1], nes->inPos - 1);
 			nes->inPos --;
-			mvwprintw(wMaps, nes->textY, nes->textX, "%*s", nes->inPos, nes->input);
+			mvwprintw(win, nes->textY, nes->textX, "%*s", nes->inPos, nes->input);
 		}
 		nes->input[nes->inPos] = key;
-		mvwaddch(wMaps, nes->textY, nes->textX + nes->inPos, key);
+		mvwaddch(win, nes->textY, nes->textX + nes->inPos, key);
 		nes->inPos ++;
 		
 		nes->value = ParseNumber(nes->input, nes->inPos);
@@ -690,9 +715,9 @@ static void tui_init(void)
 	wView = subwin(stdscr, LINES - MAPSWIN_HEIGHT - 1, COLS, 1, 0);
 	wMaps = subwin(stdscr, MAPSWIN_HEIGHT, COLS, LINES - MAPSWIN_HEIGHT, 0);
 	
-	colorbox(wTitle, COLOR_TITLE, 0);
-	colorbox(wView, COLOR_MAINVIEW, 0);
-	colorbox(wMaps, COLOR_MAPPINGS, 0);
+	ColorWindow(wTitle, COLOR_TITLE, A_NORMAL, 0);
+	ColorWindow(wView, COLOR_MAINVIEW, A_NORMAL, 0);
+	ColorWindow(wMaps, COLOR_MAPPINGS, A_NORMAL, 0);
 	wprintw(wTitle, "ROM Descrambler - %s", appData->filePath);
 	wrefresh(wTitle);
 	
@@ -871,20 +896,19 @@ static void RefreshHexView(void)
 
 static void Dialog_SaveData(void)
 {
-	const char* title = "Save descrambled data";
 	WINDOW* wDlg;
 	int oldx, oldy, maxx, maxy;
-	int dlgHeight = 3;
-	int dlgWidth = 60;
+	const int dlgHeight = 3;
+	const int dlgWidth = 60;
 	int dlgX = (getmaxx(stdscr) - dlgWidth) / 2;
 	int dlgY = (getmaxy(stdscr) - dlgHeight) / 2;
 	UINT8 fin;
 	char fileName[0x200];
 	
 	wDlg = newwin(dlgHeight, dlgWidth, dlgY, dlgX);
-	colorbox(wDlg, COLOR_DIALOG, 1);
+	ColorWindow(wDlg, COLOR_DIALOG, A_NORMAL, 1);
 	
-	mvwaddstr(wDlg, 0, (dlgWidth - strlen(title)) / 2, title);
+	DrawCenteredText(wDlg, 0, 0, dlgWidth, "Save descrambled data");
 	mvwaddstr(wDlg, 1, 2, "File Name: ");
 	wrefresh(wDlg);
 	strcpy(fileName, "out.bin");
@@ -913,20 +937,19 @@ static void Dialog_SaveData(void)
 
 static void Dialog_GoToOffset(void)
 {
-	const char* title = "Go To Offset";
 	WINDOW* wDlg;
 	int oldx, oldy, maxx, maxy;
-	int dlgHeight = 3;
-	int dlgWidth = 32;
+	const int dlgHeight = 3;
+	const int dlgWidth = 32;
 	int dlgX = (getmaxx(stdscr) - dlgWidth) / 2;
 	int dlgY = (getmaxy(stdscr) - dlgHeight) / 2;
 	UINT8 fin;
 	char ofsStr[0x09];	// enough for 32-bit offsets
 	
 	wDlg = newwin(dlgHeight, dlgWidth, dlgY, dlgX);
-	colorbox(wDlg, COLOR_DIALOG, 1);
+	ColorWindow(wDlg, COLOR_DIALOG, A_NORMAL, 1);
 	
-	mvwaddstr(wDlg, 0, (dlgWidth - strlen(title)) / 2, title);
+	DrawCenteredText(wDlg, 0, 0, dlgWidth, "Go To Offset");
 	mvwaddstr(wDlg, 1, 2, "Offset: 0x");
 	wrefresh(wDlg);
 	strcpy(ofsStr, "");
@@ -944,6 +967,236 @@ static void Dialog_GoToOffset(void)
 		}
 	}
 	delwin(wDlg);
+	touchwin(stdscr);
+	wrefresh(stdscr);
+	return;
+}
+
+static void PrintOptEntry(OPT_ENTRY* oe, WINDOW* win, UINT8 type, int y, int x, int cx, int cw, const char* text, char letter)
+{
+	const char* lPos = strchr(text, letter);
+	
+	oe->type = type;
+	oe->access = (char)toupper((unsigned char)letter);
+	oe->y = y;
+	oe->fx = cx;
+	oe->fw = cw;
+	oe->cx = (cw == 0) ? cx : (cx + cw - 1);
+	
+	mvwaddstr(win, y, x, text);
+	if (lPos != 0)
+	{
+		wmove(win, y, x + (lPos - text));
+		wchgat(win, 1, A_NORMAL, COLOR_MAPPINGS, NULL);
+	}
+	return;
+}
+
+static void Dialog_Options(void)
+{
+	struct {
+		int aCount;
+		int dCount;
+		int bytesRow;
+		int groupSize;
+		UINT8 cfgAutoSave;
+	} optState;
+	OPT_ENTRY optEnt[8];
+	WINDOW* wDlg;
+	const int dlgHeight = 14;
+	const int dlgWidth = 32;
+	int entryMax;
+	int dlgX = (getmaxx(stdscr) - dlgWidth) / 2;
+	int dlgY = (getmaxy(stdscr) - dlgHeight) / 2;
+	int curEntry;
+	OPT_ENTRY* curOE;
+	UINT8 doQuit;
+	UINT8 didChange;
+	int cursorPosChg;
+	NUM_ENTRY_STATE nes;
+	
+	optState.aCount = (int)appData->dsiAddr.bitCnt;
+	optState.dCount = (int)appData->dsiData.bitCnt;
+	optState.bytesRow = (int)appData->info.lineChrs;
+	optState.groupSize = (int)appData->info.wordSize;
+	optState.cfgAutoSave = appData->cfgAutoSave;
+	
+	wDlg = newwin(dlgHeight, dlgWidth, dlgY, dlgX);
+	ColorWindow(wDlg, COLOR_DIALOG, A_NORMAL, 1);
+	
+	DrawCenteredText(wDlg, 0, 0, dlgWidth, "Options");
+	curEntry = 2;
+	
+	dlgY = dlgHeight - 2;
+	dlgX = dlgWidth / 2;
+	PrintOptEntry(&optEnt[0], wDlg, OEF_BUTTON, dlgY, dlgX - 8, dlgX - 6, 0, "[ OK ]", 'O');
+	PrintOptEntry(&optEnt[1], wDlg, OEF_BUTTON, dlgY, dlgX + 0, dlgX + 2, 0, "[ Cancel ]", 'C');
+	
+	DrawBox  (wDlg, 1, 2, 4, dlgWidth - 4);
+	mvwaddstr(wDlg, 1, 4, "Mappings");
+	PrintOptEntry(&optEnt[2], wDlg, OEF_NUMBER, 2, 4, 24, 4, "Address entrys:", 'A');
+	optEnt[2].maxValue = 32;
+	optEnt[2].valPtr = &optState.aCount;
+	PrintOptEntry(&optEnt[3], wDlg, OEF_NUMBER, 3, 4, 24, 4, "Data entrys:", 'D');
+	optEnt[3].maxValue = 8;
+	optEnt[3].valPtr = &optState.dCount;
+	
+	DrawBox  (wDlg, 5, 2, 4, dlgWidth - 4);
+	mvwaddstr(wDlg, 5, 4, "Hex View");
+	PrintOptEntry(&optEnt[4], wDlg, OEF_NUMBER, 6, 4, 24, 4, "Bytes per row:", 'B');
+	optEnt[4].maxValue = 999;
+	optEnt[4].valPtr = &optState.bytesRow;
+	PrintOptEntry(&optEnt[5], wDlg, OEF_NUMBER, 7, 4, 24, 4, "Group size:", 'G');
+	optEnt[5].maxValue = 999;
+	optEnt[5].valPtr = &optState.groupSize;
+	
+	DrawBox  (wDlg, 9, 2, 3, dlgWidth - 4);
+	mvwaddstr(wDlg, 9, 4, "Miscellaneous");
+	PrintOptEntry(&optEnt[6], wDlg, OEF_TOGGLE, 10, 4, 25, 0, "Config auto-save:", 'v');
+	mvwprintw(wDlg,10, 24, "[ ]");
+	entryMax = 7;
+	
+	wattron(wDlg, COLOR_PAIR(COLOR_EDITBOX));
+	for (curEntry = 2; curEntry <= 5; curEntry ++)
+		mvwprintw(wDlg, optEnt[curEntry].y, optEnt[curEntry].fx, "%*d", optEnt[curEntry].fw, *optEnt[curEntry].valPtr);
+	wattroff(wDlg, COLOR_PAIR(COLOR_EDITBOX));
+	mvwaddch(wDlg, optEnt[6].y, optEnt[6].fx, optState.cfgAutoSave ? 'x' : ' ');
+	wrefresh(wDlg);
+	
+	keypad(wDlg, TRUE);
+	curs_set(1);
+	curEntry = 2;	curOE = &optEnt[curEntry];
+	wmove(wDlg, curOE->y, curOE->cx);
+	doQuit = 0;
+	didChange = 0;
+	while(!doQuit)
+	{
+		int key = wgetch(wDlg);
+		UINT8 finishSelect = 0;
+		
+		if (curOE->type == OEF_NUMBER && didChange)
+		{
+			finishSelect = KeyHandler_NumEntry(&nes, wDlg, key, 0);
+			if (finishSelect != 0 && finishSelect != 0xFF)
+				key = 0;
+		}
+		else if (curOE->type == OEF_TOGGLE)
+		{
+			if (key == ' ')
+			{
+				if (curEntry == 6)
+				{
+					optState.cfgAutoSave = !optState.cfgAutoSave;
+					mvwaddch(wDlg, curOE->y, curOE->fx, optState.cfgAutoSave ? 'x' : ' ');
+					wmove(wDlg, curOE->y, curOE->cx);
+				}
+				key = 0;
+			}
+		}
+		else if (curOE->type == OEF_BUTTON)
+		{
+			if (key == KEY_RETURN || key == ' ')
+			{
+				if (curEntry == 0)	// OK
+					doQuit = 1;
+				else if (curEntry == 1)	// Cancel
+					doQuit = 2;
+				key = 0;
+			}
+		}
+		
+		cursorPosChg = 0;
+		switch(key)
+		{
+		case KEY_ESC:
+			doQuit = 2;
+			break;
+		case KEY_RETURN:
+			doQuit = 1;
+			break;
+		case KEY_UP:
+			cursorPosChg = -1;
+			break;
+		case KEY_DOWN:
+			cursorPosChg = +1;
+			break;
+		default:
+			if (key >= '0' && key <= '9')
+			{
+				if (curOE->type == OEF_NUMBER && !didChange)
+				{
+					wattron(wDlg, COLOR_PAIR(COLOR_EDITBOX));
+					nes.textX = curOE->fx;
+					nes.textY = curOE->y;
+					nes.maxValue = curOE->maxValue;
+					nes.value = *curOE->valPtr;
+					NumEntryState_Init(&nes);
+					nes.textX = curOE->fx + curOE->fw - nes.maxDigits;	// less strict left-alignment
+					mvwhline(wDlg, curOE->y, curOE->fx, ' ', curOE->fw);	// erase text
+					finishSelect = KeyHandler_NumEntry(&nes, wDlg, key, 0);
+					didChange = 1;
+				}
+			}
+			else
+			{
+				// handle accessor keys
+				int keyOE;
+				char keyChr = '\0';
+				if (isalpha(key))
+					keyChr = (char)toupper(key);
+				for (keyOE = 0; keyOE < entryMax; keyOE ++)
+				{
+					if (optEnt[keyOE].access == keyChr)
+					{
+						cursorPosChg = keyOE - curEntry;
+						if (didChange)
+							finishSelect = 0xFF;
+						break;
+					}
+				}
+			}
+			break;
+		}
+		if (curOE->type == OEF_NUMBER && finishSelect)
+		{
+			// finishSelect == 2 -> keep previous value
+			if (finishSelect == 1 || finishSelect == 0xFF)	// "confirm" (1) or "move" (0xFF)
+			{
+				if (nes.value <= curOE->maxValue)
+					*curOE->valPtr = nes.value;
+			}
+			mvwprintw(wDlg, curOE->y, curOE->fx, "%*d", curOE->fw, *curOE->valPtr);
+			wmove(wDlg, curOE->y, curOE->cx);
+			didChange = 0;
+		}
+		if (cursorPosChg != 0)
+		{
+			curEntry += cursorPosChg;
+			if (curEntry < 0)
+				curEntry += entryMax;
+			else if (curEntry >= entryMax)
+				curEntry -= entryMax;
+			curOE = &optEnt[curEntry];
+			wmove(wDlg, curOE->y, curOE->cx);
+			wattroff(wDlg, COLOR_PAIR(COLOR_EDITBOX));
+			didChange = 0;
+		}
+	}
+	
+	curs_set(0);
+	delwin(wDlg);
+	if (doQuit == 1)
+	{
+		appData->dsiAddr.bitCnt = (UINT8)optState.aCount;
+		appData->dsiData.bitCnt = (UINT8)optState.dCount;
+		appData->info.lineChrs = (size_t)optState.bytesRow;
+		appData->info.wordSize = (size_t)optState.groupSize;
+		appData->cfgAutoSave = optState.cfgAutoSave;
+		
+		DrawMappingsWindow();
+		ResizeHexDisplay(&appData->info, &appData->work);
+		RefreshHexView();
+	}
 	touchwin(stdscr);
 	wrefresh(stdscr);
 	return;
@@ -967,7 +1220,7 @@ static UINT8 KeyHandler_Global(int key)
 		return 1;
 	case 'o':
 	case 'O':	// O = options dialog
-		//Dialog_Options();
+		Dialog_Options();
 		return 1;
 	case KEY_F(1):
 		// display help dialog
