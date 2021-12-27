@@ -1,0 +1,5 @@
+- allow user to specify custom configuration file name
+- add dialog to allow explicit load/save of configuration file
+- "conversion-only" mode that takes a configuration + input file, descrambles it and quits then
+- repaint entire window after KEY_RESIZE event
+- add F1 help dialog

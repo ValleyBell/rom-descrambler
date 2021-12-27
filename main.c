@@ -23,7 +23,7 @@ static UINT8 WriteFileData(const char* fileName, size_t dataLen, const void* dat
 
 int main(int argc, char* argv[])
 {
-	const HEXVIEW_INFO hviDefault = {16, 2, 3, 0};
+	const HEXVIEW_INFO hviDefault = {16, 2, 2, 0};
 	UINT8 retVal;
 	APP_DATA hexView;
 	const char* fileName;
