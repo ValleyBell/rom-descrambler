@@ -425,6 +425,8 @@ static UINT8 KeyHandler_MappingsMain(int key)
 		return 1;
 	case 'a':
 	case 'A':
+		if (vmState.mode == VMAP_MODE_CHANGE)
+			KeyHandler_ChangeValue(KEY_ESC);
 		vmState.mode = VMAP_MODE_SELECT;
 		vmState.selType = DST_ADDR;
 		mvwprintw(wMaps, 0, 50, "Select Line: %s ", "Address");
@@ -437,6 +439,8 @@ static UINT8 KeyHandler_MappingsMain(int key)
 		return 1;
 	case 'd':
 	case 'D':
+		if (vmState.mode == VMAP_MODE_CHANGE)
+			KeyHandler_ChangeValue(KEY_ESC);
 		vmState.mode = VMAP_MODE_SELECT;
 		vmState.selType = DST_DATA;
 		mvwprintw(wMaps, 0, 50, "Select Line: %s ", "Data");
@@ -449,6 +453,8 @@ static UINT8 KeyHandler_MappingsMain(int key)
 		return 1;
 	case 'r':
 	case 'R':	// revert all mappings
+		if (vmState.mode == VMAP_MODE_CHANGE)
+			KeyHandler_ChangeValue(KEY_ESC);
 		{
 			int mode;
 			for (mode = 0; mode < 2; mode ++)
@@ -458,6 +464,8 @@ static UINT8 KeyHandler_MappingsMain(int key)
 			}
 			RefreshHexView();
 			DrawMappingsWindow();
+			MappingView_RefreshCursorPos(0);
+			wrefresh(wMaps);
 		}
 		break;
 	case KEY_UP:
@@ -518,8 +526,10 @@ static UINT8 KeyHandler_MappingsMain(int key)
 			wrefresh(wMaps);
 		}
 		return 1;
-	case '-':
 	case '+':
+	case '-':
+		if (vmState.mode == VMAP_MODE_CHANGE)
+			KeyHandler_ChangeValue(KEY_ESC);
 		{
 			DESCRMB_INFO* dsi;
 			int mapping, mode;
@@ -587,14 +597,14 @@ static UINT8 KeyHandler_MappingsMain(int key)
 static UINT8 KeyHandler_ChangeValue(int key)
 {
 	UINT8 finishSelect = KeyHandler_NumEntry(&vmState.numEntry, wMaps, key, 0);
-	if (finishSelect)
+	if (finishSelect & 0x80)
 	{
 		int mapping, mode;
 		
 		mapping = MappingView_Entry2Line(vmState.curEntry, &mode);
 		DESCRMB_INFO* dsi = GetDescambleInfo(mode);
-		// finishSelect == 2 -> keep previous value
-		if (finishSelect == 1 || finishSelect == 0xFF)	// "confirm" (1) or "move" (0xFF)
+		// finishSelect == 0x82 -> keep previous value
+		if (finishSelect == 0x81 || finishSelect == 0xFF)	// "confirm" (0x81) or "move" (0xFF)
 		{
 			if (vmState.numEntry.value < dsi->bitCnt)	// apply value when in range
 			{
@@ -609,7 +619,7 @@ static UINT8 KeyHandler_ChangeValue(int key)
 		MappingView_RefreshCursorPos(0);
 	}
 	wrefresh(wMaps);
-	if (finishSelect == 0xFF)
+	if (finishSelect == 0x00 || finishSelect == 0xFF)
 		return 0;	// forward key to parent
 	return 1;
 }
@@ -617,10 +627,10 @@ static UINT8 KeyHandler_ChangeValue(int key)
 static UINT8 KeyHandler_MappingsSelect(int key)
 {
 	UINT8 finishSelect = KeyHandler_NumEntry(&vmState.numEntry, wMaps, key, 1);
-	if (finishSelect)
+	if (finishSelect & 0x80)
 	{
 		// movement key (select==0xFF) -> cancel
-		if (finishSelect == 1)
+		if (finishSelect == 0x81)
 		{
 			if (vmState.numEntry.value < vmState.mapsCnt[vmState.selType])
 				vmState.curEntry = MappingView_Line2Entry(vmState.selType, vmState.numEntry.value);
@@ -632,7 +642,7 @@ static UINT8 KeyHandler_MappingsSelect(int key)
 		MappingView_RefreshCursorPos(1);
 	}
 	wrefresh(wMaps);
-	if (finishSelect == 0xFF)
+	if (finishSelect == 0x00 || finishSelect == 0xFF)
 		return 0;	// forward key to parent
 	return 1;
 }
@@ -659,11 +669,11 @@ static UINT8 KeyHandler_NumEntry(NUM_ENTRY_STATE* nes, WINDOW* win, int key, UIN
 	{
 	case KEY_RETURN:
 		if (nes->inPos == 0)
-			return 2;	// nothing entered - cancel
+			return 0x82;	// nothing entered - cancel
 		nes->value = ParseNumber(nes->input, nes->inPos);
-		return 1;	// finished parsing
+		return 0x81;	// finished parsing
 	case KEY_ESC:
-		return 2;	// input cancelled
+		return 0x82;	// input cancelled
 	case KEY_UP:
 	case KEY_DOWN:
 	case KEY_LEFT:
@@ -692,13 +702,13 @@ static UINT8 KeyHandler_NumEntry(NUM_ENTRY_STATE* nes, WINDOW* win, int key, UIN
 				// stop accepting values when
 				//	- 1 digit (maxValue 1..10) or 2 digits (mapsCnt 11..100) were entered
 				//	- entering another digit would make selValue larger than mapsCnt
-				return 1;	// finished parsing
+				return 0x81;	// finished parsing
 			}
 		}
-		return 0;
+		return 0x01;	// did process, but not finished
 	}
 	
-	return 0;
+	return 0x00;	// not processed
 }
 
 static void tui_init(void)
@@ -1072,12 +1082,12 @@ static void Dialog_Options(void)
 	while(!doQuit)
 	{
 		int key = wgetch(wDlg);
-		UINT8 finishSelect = 0;
+		UINT8 finishSelect = 0x00;
 		
 		if (curOE->type == OEF_NUMBER && didChange)
 		{
 			finishSelect = KeyHandler_NumEntry(&nes, wDlg, key, 0);
-			if (finishSelect != 0 && finishSelect != 0xFF)
+			if (! (finishSelect == 0x00 || finishSelect == 0xFF))
 				key = 0;
 		}
 		else if (curOE->type == OEF_TOGGLE)
@@ -1120,6 +1130,27 @@ static void Dialog_Options(void)
 		case KEY_DOWN:
 			cursorPosChg = +1;
 			break;
+		case '+':
+		case '-':
+			if (curOE->type == OEF_NUMBER)
+			{
+				int newVal;
+				if (!didChange)
+					KeyHandler_NumEntry(&nes, wDlg, KEY_ESC, 0);
+				if (key == '+')
+					newVal = *curOE->valPtr + 1;
+				else //if (key == '-')
+					newVal = *curOE->valPtr - 1;
+				if (newVal >= 0 && newVal <= curOE->maxValue)
+					*curOE->valPtr = newVal;
+				wattron(wDlg, COLOR_PAIR(COLOR_EDITBOX));
+				mvwprintw(wDlg, curOE->y, curOE->fx, "%*d", curOE->fw, *curOE->valPtr);
+				wattroff(wDlg, COLOR_PAIR(COLOR_EDITBOX));
+				wmove(wDlg, curOE->y, curOE->cx);
+				didChange = 0;
+				finishSelect = 0;
+			}
+			break;
 		default:
 			if (key >= '0' && key <= '9')
 			{
@@ -1157,10 +1188,10 @@ static void Dialog_Options(void)
 			}
 			break;
 		}
-		if (curOE->type == OEF_NUMBER && finishSelect)
+		if (curOE->type == OEF_NUMBER && (finishSelect & 0x80))
 		{
-			// finishSelect == 2 -> keep previous value
-			if (finishSelect == 1 || finishSelect == 0xFF)	// "confirm" (1) or "move" (0xFF)
+			// finishSelect == 0x82 -> keep previous value
+			if (finishSelect == 0x81 || finishSelect == 0xFF)	// "confirm" (0x81) or "move" (0xFF)
 			{
 				if (nes.value <= curOE->maxValue)
 					*curOE->valPtr = nes.value;
@@ -1187,14 +1218,14 @@ static void Dialog_Options(void)
 	delwin(wDlg);
 	if (doQuit == 1)
 	{
-		appData->dsiAddr.bitCnt = (UINT8)optState.aCount;
-		appData->dsiData.bitCnt = (UINT8)optState.dCount;
+		DSI_Resize(&appData->dsiAddr, (UINT8)optState.aCount);
+		DSI_Resize(&appData->dsiData, (UINT8)optState.dCount);
 		appData->info.lineChrs = (size_t)optState.bytesRow;
 		appData->info.wordSize = (size_t)optState.groupSize;
+		ResizeHexDisplay(&appData->info, &appData->work);
 		appData->cfgAutoSave = optState.cfgAutoSave;
 		
 		DrawMappingsWindow();
-		ResizeHexDisplay(&appData->info, &appData->work);
 		RefreshHexView();
 	}
 	touchwin(stdscr);
